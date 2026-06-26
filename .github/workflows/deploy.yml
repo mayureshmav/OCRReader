@@ -1,0 +1,85 @@
+name: Build & Deploy to AWS App Runner
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  BACKEND_ECR_REPO: ocr-reader-backend
+  FRONTEND_ECR_REPO: ocr-reader-frontend
+
+jobs:
+  deploy-backend:
+    name: Backend → ECR → App Runner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push backend image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -f backend/Dockerfile -t $REGISTRY/$BACKEND_ECR_REPO:$IMAGE_TAG -t $REGISTRY/$BACKEND_ECR_REPO:latest ./backend
+          docker push $REGISTRY/$BACKEND_ECR_REPO:$IMAGE_TAG
+          docker push $REGISTRY/$BACKEND_ECR_REPO:latest
+
+      - name: Deploy to App Runner (backend)
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          aws apprunner update-service \
+            --service-arn ${{ secrets.BACKEND_APP_RUNNER_ARN }} \
+            --source-configuration "{\"ImageRepository\":{\"ImageIdentifier\":\"$REGISTRY/$BACKEND_ECR_REPO:$IMAGE_TAG\",\"ImageRepositoryType\":\"ECR\",\"ImageConfiguration\":{\"Port\":\"8080\"}},\"AuthenticationConfiguration\":{\"AccessRoleArn\":\"${{ secrets.APP_RUNNER_ECR_ROLE_ARN }}\"},\"AutoDeploymentsEnabled\":false}" \
+            --region ${{ secrets.AWS_REGION }}
+
+  deploy-frontend:
+    name: Frontend → ECR → App Runner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push frontend image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -f frontend/Dockerfile -t $REGISTRY/$FRONTEND_ECR_REPO:$IMAGE_TAG -t $REGISTRY/$FRONTEND_ECR_REPO:latest ./frontend
+          docker push $REGISTRY/$FRONTEND_ECR_REPO:$IMAGE_TAG
+          docker push $REGISTRY/$FRONTEND_ECR_REPO:latest
+
+      - name: Deploy to App Runner (frontend)
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          aws apprunner update-service \
+            --service-arn ${{ secrets.FRONTEND_APP_RUNNER_ARN }} \
+            --source-configuration "{\"ImageRepository\":{\"ImageIdentifier\":\"$REGISTRY/$FRONTEND_ECR_REPO:$IMAGE_TAG\",\"ImageRepositoryType\":\"ECR\",\"ImageConfiguration\":{\"Port\":\"3000\"}},\"AuthenticationConfiguration\":{\"AccessRoleArn\":\"${{ secrets.APP_RUNNER_ECR_ROLE_ARN }}\"},\"AutoDeploymentsEnabled\":false}" \
+            --region ${{ secrets.AWS_REGION }}
